@@ -1,0 +1,17 @@
+{
+  "name": "harbour-chat",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev:api": "cd api && cargo run",
+    "dev:web": "cd web && npm run dev",
+    "dev": "concurrently -n api,web -c blue,green \"npm run dev:api\" \"npm run dev:web\"",
+    "test:api": "cd api && cargo test",
+    "test:web": "cd web && npm test",
+    "test": "npm run test:api && npm run test:web",
+    "build:web": "cd web && npm run build"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

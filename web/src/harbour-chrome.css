@@ -1,0 +1,65 @@
+:root {
+  --harbour-chrome-height: 48px;
+  --harbour-chrome-bg: #0a0e12;
+  --harbour-chrome-border: #1e2a38;
+  --harbour-chrome-text: #c8d4e0;
+  --harbour-chrome-muted: #6b7d8f;
+  --harbour-chrome-accent: #3d7eff;
+}
+
+.harbour-chrome {
+  height: var(--harbour-chrome-height);
+  background: var(--harbour-chrome-bg);
+  border-bottom: 1px solid var(--harbour-chrome-border);
+  color: var(--harbour-chrome-text);
+  flex-shrink: 0;
+}
+
+.harbour-chrome__inner {
+  max-width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0 1rem;
+  font-size: 0.875rem;
+}
+
+.harbour-chrome__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--harbour-chrome-text);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.harbour-chrome__brand-mark {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--harbour-chrome-accent);
+}
+
+.harbour-chrome__divider {
+  width: 1px;
+  height: 1.25rem;
+  background: var(--harbour-chrome-border);
+}
+
+.harbour-chrome__app {
+  color: var(--harbour-chrome-muted);
+}
+
+.harbour-chrome__spacer {
+  flex: 1;
+}
+
+.harbour-chrome__home-link {
+  color: var(--harbour-chrome-accent);
+  text-decoration: none;
+}
+
+.harbour-chrome__home-link:hover {
+  text-decoration: underline;
+}
