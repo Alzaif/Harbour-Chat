@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::error::{AppError, AppResult};
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub port: u16,
@@ -26,6 +28,8 @@ pub struct Config {
     pub portcullis_forward_url: String,
     /// Host header sent to Portcullis when resolving app scope for WebSocket auth.
     pub forward_auth_host: String,
+    /// Request URI sent to Portcullis for path-based app scope (e.g. `/board/api/ws`).
+    pub forward_auth_uri: String,
 }
 
 impl Config {
@@ -88,8 +92,35 @@ impl Config {
             portcullis_forward_url: std::env::var("CHAT_PORTCULLIS_FORWARD_URL")
                 .unwrap_or_else(|_| "http://harbour-portcullis:3000/auth/forward".into()),
             forward_auth_host: std::env::var("CHAT_FORWARD_AUTH_HOST")
-                .unwrap_or_else(|_| "chat.harbour.local".into()),
+                .unwrap_or_else(|_| "harbour.local".into()),
+            forward_auth_uri: std::env::var("CHAT_FORWARD_AUTH_URI")
+                .unwrap_or_else(|_| "/board/api/ws".into()),
         }
+    }
+
+    pub fn validate_runtime(&self) -> AppResult<()> {
+        if self.trust_gateway_headers {
+            let token_ok = self
+                .trusted_proxy_token
+                .as_ref()
+                .is_some_and(|token| !token.trim().is_empty());
+            if !token_ok {
+                return Err(AppError::Validation(
+                    "CHAT_TRUSTED_PROXY_TOKEN is required when TRUST_GATEWAY_HEADERS=true".into(),
+                ));
+            }
+
+            let key_ok = self
+                .master_key_b64
+                .as_ref()
+                .is_some_and(|key| !key.trim().is_empty());
+            if !key_ok {
+                return Err(AppError::Validation(
+                    "CHAT_MASTER_KEY_B64 is required when TRUST_GATEWAY_HEADERS=true".into(),
+                ));
+            }
+        }
+        Ok(())
     }
 
     pub fn for_test(db_path: PathBuf) -> Self {
@@ -115,7 +146,50 @@ impl Config {
             voice_turn_secret: "harbour-dev-turn-secret".into(),
             voice_turn_ttl_seconds: 3600,
             portcullis_forward_url: "http://127.0.0.1:1/auth/forward".into(),
-            forward_auth_host: "chat.harbour.local".into(),
+            forward_auth_host: "harbour.local".into(),
+            forward_auth_uri: "/board/api/ws".into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_runtime_requires_proxy_token_when_trusting_gateway() {
+        let mut config = Config::for_test(PathBuf::from("/tmp/harbour-chat-test.db"));
+        config.trust_gateway_headers = true;
+        config.trusted_proxy_token = None;
+
+        let err = config.validate_runtime().unwrap_err();
+        assert!(matches!(err, AppError::Validation(msg) if msg.contains("CHAT_TRUSTED_PROXY_TOKEN")));
+    }
+
+    #[test]
+    fn validate_runtime_requires_master_key_when_trusting_gateway() {
+        let mut config = Config::for_test(PathBuf::from("/tmp/harbour-chat-test.db"));
+        config.trust_gateway_headers = true;
+        config.trusted_proxy_token = Some("proxy-token".into());
+        config.master_key_b64 = None;
+
+        let err = config.validate_runtime().unwrap_err();
+        assert!(matches!(err, AppError::Validation(msg) if msg.contains("CHAT_MASTER_KEY_B64")));
+    }
+
+    #[test]
+    fn validate_runtime_passes_for_dev_mode() {
+        let config = Config::for_test(PathBuf::from("/tmp/harbour-chat-test.db"));
+        assert!(config.validate_runtime().is_ok());
+    }
+
+    #[test]
+    fn validate_runtime_passes_when_gateway_mode_fully_configured() {
+        let mut config = Config::for_test(PathBuf::from("/tmp/harbour-chat-test.db"));
+        config.trust_gateway_headers = true;
+        config.trusted_proxy_token = Some("proxy-token".into());
+        config.master_key_b64 = Some("QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=".into());
+
+        assert!(config.validate_runtime().is_ok());
     }
 }

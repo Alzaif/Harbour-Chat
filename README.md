@@ -2,9 +2,11 @@
 
 Private group chat for the Harbour platform — **Rust API** (Axum, SQLite, WebSocket) and **React** SPA.
 
-- Host: `chat.harbour.local`
-- Scope: `app:chat`
-- Design: [../discord-app.md](../discord-app.md), [Phase 2 MVP](docs/design/chat-phase-2-mvp.md), [Phase 2.5 Security Hardening](docs/design/chat-phase-2-5-security-hardening.md), [Phase 3 Media and Presence](docs/design/chat-phase-3-media-presence.md), [Phase 4 WebRTC + SFU](docs/design/chat-phase-4-webrtc-sfu.md)
+- Host: `harbour.local/board` (path prefix on shell host)
+- Scope: `app:board`
+- URL: `https://harbour.<zone>:8443/board/`
+- Surfaces: Direct, Servers (Party voice), and Board — a newspaper-style household feed with period Top ranking, votes, and nested comments
+- Design: [../board-app.md](../board-app.md) (message context menu, reply/forward, Direct dock width, Board feed), [Board feed ranking](docs/design/board-feed-ranking.md) (period Top + older sections, votes, comment tree), [Phase 1 API](docs/design/chat-mvp.md) (`reply_to_message_id` / `ReplyPreview`), [Phase 2 MVP](docs/design/chat-phase-2-mvp.md), [Phase 2.5 Security Hardening](docs/design/chat-phase-2-5-security-hardening.md), [Phase 3 Media and Presence](docs/design/chat-phase-3-media-presence.md), [Phase 4 WebRTC + SFU](docs/design/chat-phase-4-webrtc-sfu.md)
 
 ## Prerequisites
 
@@ -29,7 +31,7 @@ Or from repo root: `npm install && npm run dev` (requires `cargo` on PATH).
 Grant access:
 
 ```bash
-./scripts/user-admin.sh users grant-app --email you@example.com --app chat
+./scripts/user-admin.sh users grant-app --email you@example.com --app board
 ```
 
 ## Local auth and gateway trust
@@ -37,7 +39,7 @@ Grant access:
 `TRUST_GATEWAY_HEADERS` controls identity resolution for both HTTP routes and WebSocket upgrades:
 
 - `TRUST_GATEWAY_HEADERS=false` (default local dev): uses `DEV_USER_ID`, `DEV_USER_EMAIL`, and `DEV_USER_DISPLAY_NAME`.
-- `TRUST_GATEWAY_HEADERS=true` (gateway mode): requires forwarded `X-Harbour-*` headers and enforces the `app:chat` scope.
+- `TRUST_GATEWAY_HEADERS=true` (gateway mode): requires forwarded `X-Harbour-*` headers and enforces the `app:board` scope.
 
 Security hardening env vars (Phase 2.5):
 
@@ -105,9 +107,11 @@ Local infra defaults for Phase 4 live in `harbour-infra/compose/.env.example` an
 
 Proxy notes for WebSocket signaling:
 
-- Traefik routes `Path('/api/ws')` on a dedicated `chat-ws` router **without** ForwardAuth (HTTP/1.1 upgrade requests break ForwardAuth).
+- Traefik routes board API traffic on a **dedicated `board-api` router** (priority 150) straight to the Rust API on **port 3000**, after `board-stripprefix` and ForwardAuth. Static SPA assets use the `board` router (priority 80) to nginx on port 80. This prevents `/board/api/*` from ever hitting nginx's SPA `try_files` fallback.
+- Traefik routes `Path('/board/api/ws')` on `board-ws` (priority 200), also to port 3000, **without** ForwardAuth (HTTP/1.1 upgrade requests break ForwardAuth).
+- Container nginx still accepts both `/api/*` and `/board/api/*` for local/dev paths where Traefik is not in front.
 - The chat API validates the `harbour_session` cookie by calling Portcullis `/auth/forward` internally (`CHAT_PORTCULLIS_FORWARD_URL`).
-- Nginx has a dedicated `location = /api/ws` block with WebSocket upgrade headers and long-lived proxy timeouts.
+- Nginx has dedicated `location` blocks for `/api/ws` and `/board/api/ws` with WebSocket upgrade headers and long-lived proxy timeouts.
 - The in-memory realtime hub now explicitly responds to websocket `Ping` frames with `Pong`, ignores `Pong` frames, and exits cleanly on `Close` frames.
 - If clients still disconnect during idle periods, verify upstream proxy/LB websocket timeout and control-frame handling (`Ping`/`Pong`) are not stripping or buffering frames.
 

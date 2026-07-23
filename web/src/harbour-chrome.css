@@ -1,10 +1,10 @@
 :root {
-  --harbour-chrome-height: 48px;
-  --harbour-chrome-bg: #0a0e12;
-  --harbour-chrome-border: #1e2a38;
-  --harbour-chrome-text: #c8d4e0;
-  --harbour-chrome-muted: #6b7d8f;
-  --harbour-chrome-accent: #3d7eff;
+  --harbour-chrome-height: 52px;
+  --harbour-chrome-bg: linear-gradient(180deg, rgba(11, 26, 30, 0.92), rgba(8, 18, 22, 0.85));
+  --harbour-chrome-border: rgba(124, 196, 184, 0.16);
+  --harbour-chrome-text: #dcece9;
+  --harbour-chrome-muted: #7fa2a0;
+  --harbour-chrome-accent: #9fe23f;
 }
 
 .harbour-chrome {
@@ -13,6 +13,8 @@
   border-bottom: 1px solid var(--harbour-chrome-border);
   color: var(--harbour-chrome-text);
   flex-shrink: 0;
+  backdrop-filter: blur(16px) saturate(1.1);
+  -webkit-backdrop-filter: blur(16px) saturate(1.1);
 }
 
 .harbour-chrome__inner {
@@ -37,8 +39,9 @@
 .harbour-chrome__brand-mark {
   width: 10px;
   height: 10px;
-  border-radius: 2px;
+  border-radius: 3px;
   background: var(--harbour-chrome-accent);
+  box-shadow: 0 0 10px rgba(159, 226, 63, 0.7);
 }
 
 .harbour-chrome__divider {
@@ -55,6 +58,14 @@
   flex: 1;
 }
 
+.harbour-chrome__center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-width: 0;
+}
+
 .harbour-chrome__home-link {
   color: var(--harbour-chrome-accent);
   text-decoration: none;
@@ -62,4 +73,59 @@
 
 .harbour-chrome__home-link:hover {
   text-decoration: underline;
+}
+
+/* Integrated section navigation (Direct | Servers | Board) */
+.harbour-chrome__nav {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.2rem;
+  border-radius: 999px;
+  background: rgba(8, 18, 22, 0.55);
+  border: 1px solid var(--harbour-chrome-border);
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.harbour-chrome__nav::-webkit-scrollbar {
+  display: none;
+}
+
+.harbour-chrome__nav-tab {
+  min-height: 32px;
+  padding: 0 1.1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  color: var(--harbour-chrome-muted);
+  font-weight: 600;
+  font-size: 0.85rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  transition: color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.harbour-chrome__nav-tab:hover {
+  color: var(--harbour-chrome-text);
+  background: rgba(159, 226, 63, 0.08);
+}
+
+.harbour-chrome__nav-tab--active {
+  color: var(--chat-accent-contrast, #0b1a0c);
+  background: linear-gradient(180deg, #b4f35b, #8ed12f);
+  border-color: rgba(159, 226, 63, 0.6);
+  box-shadow: 0 0 16px rgba(159, 226, 63, 0.4);
+}
+
+@media (max-width: 480px) {
+  .harbour-chrome__app {
+    display: none;
+  }
+
+  .harbour-chrome__nav-tab {
+    padding: 0 0.75rem;
+  }
 }

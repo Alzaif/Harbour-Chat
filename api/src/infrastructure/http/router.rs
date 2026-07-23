@@ -8,38 +8,11 @@ use axum::{
     Json, Router,
 };
 use serde::Deserialize;
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::domain::entities::PresenceStatus;
 use crate::error::AppError;
 use crate::infrastructure::http::gateway::{gateway_identity_middleware, AuthUser};
 use crate::infrastructure::state::AppState;
-
-fn debug_log(hypothesis_id: &str, location: &str, message: &str, data: serde_json::Value) {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-    let payload = serde_json::json!({
-        "sessionId":"2fd5a8",
-        "runId": format!("api-debug-{timestamp}"),
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": timestamp
-    });
-    eprintln!("{payload}");
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/home/ashlee/Git-Repos/Harbour/.cursor/debug-2fd5a8.log")
-    {
-        let _ = writeln!(file, "{payload}");
-    }
-}
 
 pub fn create_app(state: AppState) -> Router {
     let public = Router::new()
@@ -48,8 +21,15 @@ pub fn create_app(state: AppState) -> Router {
 
     let api = Router::new()
         .route("/me", get(me))
+        .route("/me/settings", get(get_user_settings).patch(update_user_settings))
+        .route("/me/avatar", post(upload_avatar))
+        .route("/users/search", get(search_users))
+        .route("/users/{id}/avatar", get(get_user_avatar))
         .route("/servers", get(list_servers).post(create_server))
-        .route("/servers/{id}", get(get_server))
+        .route(
+            "/servers/{id}",
+            get(get_server).patch(update_server).delete(delete_server),
+        )
         .route(
             "/servers/{id}/channels",
             post(create_channel),
@@ -91,6 +71,17 @@ pub fn create_app(state: AppState) -> Router {
         )
         .route("/attachments/{id}", get(get_attachment))
         .route("/channels/{id}/read", post(mark_read))
+        .route("/board/posts", get(list_board_posts).post(create_board_post))
+        .route("/board/posts/{id}/share", post(share_board_post))
+        .route("/board/posts/{id}/vote", post(vote_board_post))
+        .route(
+            "/board/posts/{id}/comments",
+            get(list_board_comments).post(create_board_comment),
+        )
+        .route("/board/posts/{id}", get(get_board_post))
+        .route("/board/share-targets", get(list_share_targets))
+        .route("/dms", get(list_dms))
+        .route("/dm-peers", get(list_dm_peers))
         .route("/dms/{user_id}", post(open_dm))
         .route("/ws", get(ws_handler))
         .route_layer(middleware::from_fn(security_headers_middleware))
@@ -116,12 +107,17 @@ async fn version(State(state): State<AppState>) -> Json<serde_json::Value> {
     }))
 }
 
-async fn me(AuthUser(user): AuthUser) -> Json<serde_json::Value> {
-    Json(serde_json::json!({
+async fn me(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let avatar_updated_at = state.avatars.meta(&user.id).await?.map(|m| m.updated_at);
+    Ok(Json(serde_json::json!({
         "id": user.id,
         "email": user.email,
         "displayName": user.display_name,
-    }))
+        "avatarUpdatedAt": avatar_updated_at,
+    })))
 }
 
 async fn list_servers(
@@ -135,6 +131,7 @@ async fn list_servers(
 #[derive(Deserialize)]
 struct NameBody {
     name: Option<String>,
+    description: Option<String>,
 }
 
 async fn create_server(
@@ -144,9 +141,100 @@ async fn create_server(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let server = state
         .chat
-        .create_server(&user, body.name.as_deref().unwrap_or(""))
+        .create_server(
+            &user,
+            body.name.as_deref().unwrap_or(""),
+            body.description.as_deref(),
+        )
         .await?;
     Ok(Json(serde_json::to_value(server).unwrap()))
+}
+
+#[derive(Deserialize)]
+struct UpdateServerBody {
+    name: Option<String>,
+    description: Option<String>,
+    #[serde(rename = "iconUrl")]
+    icon_url: Option<String>,
+    #[serde(rename = "cardColor")]
+    card_color: Option<String>,
+}
+
+fn patch_optional_text(value: &Option<String>) -> Option<Option<&str>> {
+    value.as_ref().map(|raw| {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    })
+}
+
+async fn update_server(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateServerBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let server = state
+        .chat
+        .update_server(
+            &user,
+            &id,
+            body.name.as_deref().map(str::trim),
+            patch_optional_text(&body.description),
+            patch_optional_text(&body.icon_url),
+            patch_optional_text(&body.card_color),
+        )
+        .await?;
+    Ok(Json(serde_json::to_value(server).unwrap()))
+}
+
+async fn delete_server(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    state.chat.delete_server(&user, &id).await?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct UpdateUserSettingsBody {
+    #[serde(rename = "pushToTalk")]
+    push_to_talk: Option<bool>,
+    #[serde(rename = "pushToTalkKey")]
+    push_to_talk_key: Option<String>,
+}
+
+async fn get_user_settings(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    use crate::domain::ports::UserRepository;
+    let settings = state.users.get_settings(&user.id).await?;
+    Ok(Json(serde_json::to_value(settings).unwrap()))
+}
+
+async fn update_user_settings(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Json(body): Json<UpdateUserSettingsBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    use crate::domain::ports::UserRepository;
+    let mut settings = state.users.get_settings(&user.id).await?;
+    if let Some(push_to_talk) = body.push_to_talk {
+        settings.push_to_talk = push_to_talk;
+    }
+    if let Some(key) = body.push_to_talk_key {
+        let trimmed = key.trim();
+        if !trimmed.is_empty() {
+            settings.push_to_talk_key = trimmed.to_string();
+        }
+    }
+    let saved = state.users.upsert_settings(&user.id, &settings).await?;
+    Ok(Json(serde_json::to_value(saved).unwrap()))
 }
 
 async fn get_server(
@@ -200,8 +288,44 @@ async fn add_member(
     Path(id): Path<String>,
     Json(body): Json<AddMemberBody>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    use crate::domain::ports::UserRepository;
+    if state.users.find_by_id(&body.user_id).await?.is_none() {
+        return Err(AppError::NotFound("user not found".into()));
+    }
     let member = state.chat.add_member(&user, &id, &body.user_id).await?;
     Ok(Json(serde_json::to_value(member).unwrap()))
+}
+
+#[derive(Deserialize)]
+struct SearchUsersQuery {
+    q: Option<String>,
+    #[serde(rename = "excludeServerId")]
+    exclude_server_id: Option<String>,
+    limit: Option<u32>,
+}
+
+async fn search_users(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Query(q): Query<SearchUsersQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    use crate::domain::ports::UserRepository;
+    let query = q.q.unwrap_or_default();
+    if query.trim().len() < 2 {
+        return Err(AppError::Validation(
+            "search query must be at least 2 characters".into(),
+        ));
+    }
+    let results = state
+        .users
+        .search(
+            &user.id,
+            &query,
+            q.exclude_server_id.as_deref(),
+            q.limit.unwrap_or(20),
+        )
+        .await?;
+    Ok(Json(serde_json::to_value(results).unwrap()))
 }
 
 async fn list_members(
@@ -235,6 +359,8 @@ async fn list_messages(
 #[derive(Deserialize)]
 struct ContentBody {
     content: Option<String>,
+    #[serde(default, alias = "replyToMessageId")]
+    reply_to_message_id: Option<String>,
 }
 
 async fn send_message(
@@ -245,7 +371,12 @@ async fn send_message(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let message = state
         .chat
-        .send_message(&user, &id, body.content.as_deref().unwrap_or(""))
+        .send_message(
+            &user,
+            &id,
+            body.content.as_deref().unwrap_or(""),
+            body.reply_to_message_id.as_deref(),
+        )
         .await?;
     Ok(Json(serde_json::to_value(message).unwrap()))
 }
@@ -425,6 +556,62 @@ async fn upload_message_attachment(
     Ok(Json(serde_json::to_value(message).unwrap()))
 }
 
+async fn upload_avatar(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    mut multipart: Multipart,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let mut mime_type = String::from("application/octet-stream");
+    let mut data: Option<Vec<u8>> = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::Validation(e.to_string()))?
+    {
+        if field.name().unwrap_or("") == "file" {
+            mime_type = field
+                .content_type()
+                .map(|s| s.to_string())
+                .unwrap_or(mime_type.clone());
+            data = Some(
+                field
+                    .bytes()
+                    .await
+                    .map_err(|e| AppError::Validation(e.to_string()))?
+                    .to_vec(),
+            );
+        }
+    }
+
+    let data = data.ok_or_else(|| AppError::Validation("file is required".into()))?;
+    let meta = state.avatars.save(&user.id, &mime_type, &data).await?;
+    Ok(Json(serde_json::json!({
+        "mimeType": meta.mime_type,
+        "sizeBytes": meta.size_bytes,
+        "avatarUpdatedAt": meta.updated_at,
+    })))
+}
+
+async fn get_user_avatar(
+    State(state): State<AppState>,
+    AuthUser(_user): AuthUser,
+    Path(id): Path<String>,
+) -> Result<Response, AppError> {
+    let (mime_type, bytes) = state
+        .avatars
+        .read(&id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("avatar not found".into()))?;
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, mime_type)
+        .header(header::CACHE_CONTROL, "private, max-age=300")
+        .header("x-content-type-options", "nosniff")
+        .body(Body::from(bytes))
+        .map_err(|e| AppError::Internal(e.to_string()))?)
+}
+
 async fn get_attachment(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -472,11 +659,168 @@ async fn mark_read(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
+async fn list_board_posts(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Query(query): Query<ListPostsQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    use crate::application::board_service::FeedPeriod;
+    let period = FeedPeriod::parse(query.period.as_deref().unwrap_or("day"))?;
+    let feed = state
+        .board
+        .list_feed(&user, period, query.limit.unwrap_or(20))
+        .await?;
+    Ok(Json(serde_json::to_value(feed).unwrap()))
+}
+
+async fn create_board_post(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Json(body): Json<CreatePostBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let post = state
+        .board
+        .create_post(&user, body.title.as_deref(), &body.body, body.link_url.as_deref())
+        .await?;
+    Ok(Json(serde_json::to_value(post).unwrap()))
+}
+
+async fn get_board_post(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let post = state.board.get_post(&user, &id).await?;
+    Ok(Json(serde_json::to_value(post).unwrap()))
+}
+
+async fn vote_board_post(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+    Json(body): Json<VotePostBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let post = state.board.vote_post(&user, &id, body.value).await?;
+    Ok(Json(serde_json::to_value(post).unwrap()))
+}
+
+async fn list_board_comments(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let comments = state.board.list_comments(&user, &id).await?;
+    Ok(Json(serde_json::to_value(comments).unwrap()))
+}
+
+async fn create_board_comment(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+    Json(body): Json<CreateCommentBody>,
+) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    let comment = state
+        .board
+        .create_comment(
+            &user,
+            &id,
+            &body.body,
+            body.parent_comment_id.as_deref(),
+        )
+        .await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::to_value(comment).unwrap()),
+    ))
+}
+
+async fn list_share_targets(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let targets = state.board.list_share_targets(&user).await?;
+    Ok(Json(serde_json::to_value(targets).unwrap()))
+}
+
+async fn share_board_post(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+    Json(body): Json<SharePostBody>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if body.channel_id.trim().is_empty() {
+        return Err(AppError::Validation("channelId is required".into()));
+    }
+    let message = state
+        .board
+        .share_post(&user, &id, body.channel_id.trim())
+        .await?;
+    Ok(Json(serde_json::to_value(message).unwrap()))
+}
+
+#[derive(Deserialize)]
+struct SharePostBody {
+    #[serde(rename = "channelId")]
+    channel_id: String,
+}
+
+#[derive(Deserialize)]
+struct ListPostsQuery {
+    period: Option<String>,
+    limit: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct CreatePostBody {
+    title: Option<String>,
+    body: String,
+    link_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct VotePostBody {
+    value: i8,
+}
+
+#[derive(Deserialize)]
+struct CreateCommentBody {
+    body: String,
+    #[serde(rename = "parentCommentId")]
+    parent_comment_id: Option<String>,
+}
+
+async fn list_dms(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let inbox = state.chat.list_dms(&user).await?;
+    Ok(Json(serde_json::to_value(inbox).unwrap()))
+}
+
+async fn list_dm_peers(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let peers = state.chat.list_dm_peers(&user).await?;
+    Ok(Json(serde_json::to_value(peers).unwrap()))
+}
+
 async fn open_dm(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
     Path(user_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    use crate::domain::ports::{GatewayIdentity, UserRepository};
+    if state.users.find_by_id(&user_id).await?.is_none() {
+        state
+            .users
+            .upsert_from_gateway(GatewayIdentity {
+                id: user_id.clone(),
+                email: format!("{user_id}@harbour.local"),
+                display_name: None,
+            })
+            .await?;
+    }
     let channel = state.chat.open_dm(&user, &user_id).await?;
     Ok(Json(serde_json::to_value(channel).unwrap()))
 }
@@ -788,24 +1132,8 @@ async fn ws_handler(
     AuthUser(user): AuthUser,
 ) -> Result<impl axum::response::IntoResponse, AppError> {
     let realtime = state.realtime.clone();
-    let user_id = user.id;
-    // #region agent log
-    debug_log(
-        "S6",
-        "router.rs:ws_handler",
-        "WS handler reached; returning upgrade response",
-        serde_json::json!({ "user_id_len": user_id.len() }),
-    );
-    // #endregion
+    let chat = state.chat.clone();
     Ok(ws.on_upgrade(move |socket| async move {
-        // #region agent log
-        debug_log(
-            "S7",
-            "router.rs:ws_handler:on_upgrade",
-            "WS upgrade callback entered",
-            serde_json::json!({ "user_id_len": user_id.len() }),
-        );
-        // #endregion
-        realtime.handle_socket(socket, &user_id).await;
+        realtime.handle_socket(socket, user, chat).await;
     }))
 }

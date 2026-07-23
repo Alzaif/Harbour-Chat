@@ -4,7 +4,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 
 use crate::domain::entities::{
-    Channel, ChannelType, Member, MemberRole, Message, Presence, PresenceStatus, ReactionSummary,
+    Channel, ChannelType, DmInboxEntry, DmPeer, Member, MemberRole, Message, Presence, PresenceStatus, ReactionSummary,
     Server, TypingIndicator, User, VoiceParticipant,
 };
 use crate::error::AppResult;
@@ -23,6 +23,15 @@ pub trait ChatRepository: Send + Sync {
     async fn get_server(&self, server_id: &str) -> AppResult<Option<Server>>;
     async fn get_server_detail(&self, server_id: &str) -> AppResult<Option<ServerDetail>>;
     async fn create_server(&self, name: &str, owner: &User) -> AppResult<Server>;
+    async fn update_server(
+        &self,
+        server_id: &str,
+        name: Option<&str>,
+        description: Option<Option<&str>>,
+        icon_url: Option<Option<&str>>,
+        card_color: Option<Option<&str>>,
+    ) -> AppResult<Server>;
+    async fn delete_server(&self, server_id: &str) -> AppResult<()>;
     async fn get_member(&self, server_id: &str, user_id: &str) -> AppResult<Option<Member>>;
     async fn add_member(
         &self,
@@ -50,6 +59,7 @@ pub trait ChatRepository: Send + Sync {
         channel_id: &str,
         author: &User,
         content: &str,
+        reply_to_message_id: Option<&str>,
     ) -> AppResult<Message>;
     async fn get_message(&self, message_id: &str) -> AppResult<Option<Message>>;
     async fn update_message_content(
@@ -81,6 +91,8 @@ pub trait ChatRepository: Send + Sync {
     async fn mark_read(&self, channel_id: &str, user_id: &str, message_id: &str) -> AppResult<()>;
     async fn find_or_create_dm(&self, user_a: &str, user_b: &str) -> AppResult<Channel>;
     async fn is_dm_participant(&self, channel_id: &str, user_id: &str) -> AppResult<bool>;
+    async fn list_dm_inbox_for_user(&self, user_id: &str) -> AppResult<Vec<DmInboxEntry>>;
+    async fn list_dm_peers_for_user(&self, user_id: &str) -> AppResult<Vec<DmPeer>>;
     async fn upsert_presence(
         &self,
         server_id: &str,

@@ -3,9 +3,10 @@ use std::sync::Arc;
 use chrono::{Duration, Utc};
 use serde_json::json;
 
+use crate::domain::board_feed::BOARD_FEED_TOPIC;
 use crate::domain::entities::{
-    Channel, ChannelType, Member, MemberRole, Message, Presence, PresenceStatus, Server,
-    TypingIndicator, User, VoiceParticipant,
+    Channel, ChannelType, Member, MemberRole, Message, Presence, PresenceStatus, ReplyPreview,
+    Server, TypingIndicator, User, VoiceParticipant,
 };
 use crate::domain::ports::{
     AttachmentStore, ChatRepository, RealtimeEvent, RealtimePublisher, ServerDetail, VoiceMediaPort,
@@ -49,6 +50,9 @@ impl ChatService {
     }
 
     pub async fn get_server_detail(&self, user: &User, server_id: &str) -> AppResult<ServerDetail> {
+        if self.chat.get_server(server_id).await?.is_none() {
+            return Err(AppError::NotFound("server not found".into()));
+        }
         self.require_member(server_id, &user.id).await?;
         let mut detail = self
             .chat
@@ -62,20 +66,75 @@ impl ChatService {
         Ok(detail)
     }
 
-    pub async fn create_server(&self, user: &User, name: &str) -> AppResult<Server> {
+    pub async fn create_server(
+        &self,
+        user: &User,
+        name: &str,
+        description: Option<&str>,
+    ) -> AppResult<Server> {
         let name = name.trim();
         if name.is_empty() {
             return Err(AppError::Validation("name is required".into()));
         }
-        let server = self.chat.create_server(name, user).await?;
+        let mut server = self.chat.create_server(name, user).await?;
+        if let Some(desc) = description.map(str::trim).filter(|d| !d.is_empty()) {
+            server = self
+                .chat
+                .update_server(&server.id, None, Some(Some(desc)), None, None)
+                .await?;
+        }
         self.chat
             .add_member(&server.id, &user.id, MemberRole::Owner)
             .await?;
-        // Every new server starts with a default text channel.
         self.chat
             .create_channel(&server.id, "general", ChannelType::Text)
             .await?;
         Ok(server)
+    }
+
+    pub async fn update_server(
+        &self,
+        user: &User,
+        server_id: &str,
+        name: Option<&str>,
+        description: Option<Option<&str>>,
+        icon_url: Option<Option<&str>>,
+        card_color: Option<Option<&str>>,
+    ) -> AppResult<Server> {
+        let member = self.require_member(server_id, &user.id).await?;
+        if !member.role.can_moderate() {
+            return Err(AppError::Forbidden);
+        }
+        if let Some(name) = name {
+            if name.trim().is_empty() {
+                return Err(AppError::Validation("name is required".into()));
+            }
+        }
+        self.chat
+            .update_server(
+                server_id,
+                name.map(str::trim),
+                description,
+                icon_url,
+                card_color,
+            )
+            .await
+    }
+
+    pub async fn delete_server(&self, user: &User, server_id: &str) -> AppResult<()> {
+        if server_id == HARBOUR_HOME_SERVER_ID {
+            return Err(AppError::Forbidden);
+        }
+        let server = self
+            .chat
+            .get_server(server_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("server not found".into()))?;
+        self.require_member(server_id, &user.id).await?;
+        if server.owner_user_id != user.id {
+            return Err(AppError::Forbidden);
+        }
+        self.chat.delete_server(server_id).await
     }
 
     pub async fn add_member(
@@ -143,6 +202,7 @@ impl ChatService {
         user: &User,
         channel_id: &str,
         content: &str,
+        reply_to_message_id: Option<&str>,
     ) -> AppResult<Message> {
         self.require_channel_access(user, channel_id).await?;
         let content = content.trim();
@@ -154,8 +214,23 @@ impl ChatService {
                 "content must be at most {MAX_MESSAGE_LENGTH} characters"
             )));
         }
+        if let Some(reply_id) = reply_to_message_id {
+            let parent = self
+                .chat
+                .get_message(reply_id)
+                .await?
+                .ok_or_else(|| AppError::NotFound("reply target not found".into()))?;
+            if parent.channel_id != channel_id {
+                return Err(AppError::Validation(
+                    "reply must reference a message in the same channel".into(),
+                ));
+            }
+        }
         let encrypted = self.crypto.encrypt_text(content)?;
-        let mut message = self.chat.insert_message(channel_id, user, &encrypted).await?;
+        let mut message = self
+            .chat
+            .insert_message(channel_id, user, &encrypted, reply_to_message_id)
+            .await?;
         self.enrich_messages(std::slice::from_mut(&mut message)).await?;
         self.decrypt_messages(std::slice::from_mut(&mut message))?;
         self.audit
@@ -419,6 +494,24 @@ impl ChatService {
             return Err(AppError::Validation("cannot DM yourself".into()));
         }
         self.chat.find_or_create_dm(&user.id, other_user_id).await
+    }
+
+    pub async fn list_dms(&self, user: &User) -> AppResult<Vec<crate::domain::entities::DmInboxEntry>> {
+        let mut entries = self.chat.list_dm_inbox_for_user(&user.id).await?;
+        for entry in &mut entries {
+            if let Some(ref encrypted) = entry.last_message_preview {
+                entry.last_message_preview = Some(
+                    self.crypto
+                        .decrypt_text(encrypted)
+                        .unwrap_or_else(|_| "[encrypted]".into()),
+                );
+            }
+        }
+        Ok(entries)
+    }
+
+    pub async fn list_dm_peers(&self, user: &User) -> AppResult<Vec<crate::domain::entities::DmPeer>> {
+        self.chat.list_dm_peers_for_user(&user.id).await
     }
 
     pub async fn set_presence(
@@ -726,9 +819,20 @@ impl ChatService {
         let ids: Vec<String> = messages.iter().map(|m| m.id.clone()).collect();
         let reactions = self.chat.list_reactions_for_messages(&ids).await?;
         let attachments = self.attachments.list_for_messages(&ids).await?;
-        for m in messages {
+        for m in messages.iter_mut() {
             m.reactions = reactions.get(&m.id).cloned().unwrap_or_default();
             m.attachment = attachments.get(&m.id).cloned();
+            if let Some(ref reply_id) = m.reply_to_message_id.clone() {
+                if let Some(parent) = self.chat.get_message(reply_id).await? {
+                    m.reply_to = Some(ReplyPreview {
+                        id: parent.id,
+                        author_user_id: parent.author_user_id,
+                        author_display_name: parent.author_display_name,
+                        content: parent.content,
+                        deleted_at: parent.deleted_at,
+                    });
+                }
+            }
         }
         Ok(())
     }
@@ -736,6 +840,13 @@ impl ChatService {
     fn decrypt_messages(&self, messages: &mut [Message]) -> AppResult<()> {
         for m in messages {
             m.content = self.crypto.decrypt_text(&m.content)?;
+            if let Some(ref mut reply) = m.reply_to {
+                if reply.deleted_at.is_none() {
+                    reply.content = self.crypto.decrypt_text(&reply.content)?;
+                } else {
+                    reply.content.clear();
+                }
+            }
         }
         Ok(())
     }
@@ -751,6 +862,13 @@ impl ChatService {
                 .await;
         }
         Err(AppError::Forbidden)
+    }
+
+    pub async fn authorize_realtime_subscribe(&self, user: &User, topic_id: &str) -> AppResult<()> {
+        if topic_id == BOARD_FEED_TOPIC {
+            return Ok(());
+        }
+        self.require_channel_access(user, topic_id).await
     }
 
     async fn require_channel_access(&self, user: &User, channel_id: &str) -> AppResult<()> {

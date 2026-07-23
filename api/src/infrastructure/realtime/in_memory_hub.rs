@@ -7,7 +7,9 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use tokio::sync::{broadcast, RwLock};
 
+use crate::application::ChatService;
 use crate::contracts::voice_signaling::{VoiceSignalRequest, VoiceSignalResponse};
+use crate::domain::entities::User;
 use crate::domain::ports::{RealtimeEvent, RealtimePublisher};
 use crate::error::{AppError, AppResult};
 
@@ -31,11 +33,16 @@ impl InMemoryRealtimeHub {
             .clone()
     }
 
-    pub async fn handle_socket(self: &Arc<Self>, socket: WebSocket, user_id: &str) {
+    pub async fn handle_socket(
+        self: &Arc<Self>,
+        socket: WebSocket,
+        user: User,
+        chat: Arc<ChatService>,
+    ) {
         let (mut ws_tx, mut ws_rx) = socket.split();
         let hub = Arc::clone(self);
         let mut receivers: Vec<broadcast::Receiver<String>> = Vec::new();
-        let user_id = user_id.to_string();
+        let user_id = user.id.clone();
 
         loop {
             tokio::select! {
@@ -45,6 +52,13 @@ impl InMemoryRealtimeHub {
                             match parse_incoming_text(&text, &user_id) {
                                 IncomingTextAction::Subscribe(channel_ids) => {
                                     for channel_id in channel_ids {
+                                        if chat
+                                            .authorize_realtime_subscribe(&user, &channel_id)
+                                            .await
+                                            .is_err()
+                                        {
+                                            continue;
+                                        }
                                         let tx = hub.sender_for(&channel_id).await;
                                         receivers.push(tx.subscribe());
                                     }

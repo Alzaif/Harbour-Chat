@@ -12,7 +12,8 @@
   "dependencies": {
     "mediasoup-client": "^3.20.0",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "react-router-dom": "^7.17.0"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",

@@ -1,3 +1,4 @@
+pub mod board_feed;
 pub mod entities;
 pub mod ports;
 

@@ -72,6 +72,14 @@ Responsibilities:
 - establish producer with signaling API
 - expose connection state (`idle`, `connecting`, `connected`, `reconnecting`, `failed`)
 
+Party controls surfaces (mute / deafen / disconnect) adapt to viewport:
+
+- **Desktop (≥768px):** the bottom-left `BoardDock` shows the user panel and the
+  `PartyBanner` when in a party.
+- **Mobile (<768px):** the bottom-left dock is hidden. When in a party, a narrow
+  `PartyTopBar` is pinned beneath the top nav (`web/src/presentation/components/PartyTopBar.tsx`),
+  persists across every board route, and carries the mute, deafen, and disconnect controls.
+
 ## Local Infra
 
 Compose now includes:

@@ -1,9 +1,12 @@
+import type { ReactNode } from 'react';
+
 export interface HarbourAppBarProps {
   readonly homeUrl: string;
   readonly appName: string;
+  readonly center?: ReactNode;
 }
 
-export function HarbourAppBar({ homeUrl, appName }: HarbourAppBarProps) {
+export function HarbourAppBar({ homeUrl, appName, center }: HarbourAppBarProps) {
   return (
     <header className="harbour-chrome">
       <div className="harbour-chrome__inner">
@@ -13,7 +16,7 @@ export function HarbourAppBar({ homeUrl, appName }: HarbourAppBarProps) {
         </a>
         <span className="harbour-chrome__divider" aria-hidden />
         <span className="harbour-chrome__app">{appName}</span>
-        <span className="harbour-chrome__spacer" />
+        {center ? <div className="harbour-chrome__center">{center}</div> : <span className="harbour-chrome__spacer" />}
         <a href={homeUrl} className="harbour-chrome__home-link">
           All apps
         </a>

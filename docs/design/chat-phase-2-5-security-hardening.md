@@ -24,6 +24,7 @@ Primary risks addressed in this phase:
 
 - enforce forwarded HTTPS check in gateway middleware when trusting gateway headers
 - optional proxy-shared token (`X-Harbour-Proxy-Token`) required by API before accepting identity headers
+- **fail closed at startup** when `TRUST_GATEWAY_HEADERS=true`: `CHAT_TRUSTED_PROXY_TOKEN` and `CHAT_MASTER_KEY_B64` must both be set (`Config::validate_runtime`)
 - strict response hardening headers on API responses (`nosniff`, `frame deny`, HSTS, referrer policy)
 - attachment download hardened with explicit `Content-Disposition: attachment`
 - Traefik dashboard insecure mode disabled in infra config
@@ -31,6 +32,12 @@ Primary risks addressed in this phase:
 - chat service env now supports hardened trust settings:
   - `CHAT_REQUIRE_HTTPS_FORWARDED_PROTO`
   - `CHAT_TRUSTED_PROXY_TOKEN`
+
+### 1b) Realtime subscribe authorization
+
+- WebSocket `subscribe` frames are filtered through `ChatService::authorize_realtime_subscribe` before joining broadcast topics
+- channel/DM topics require the same membership checks as HTTP read paths (`require_channel_access`)
+- board feed topic (`__board__`) is allowed for any authenticated Board user (identity already gated at WS handshake)
 
 ### 2) Encryption at Rest (messages + attachments)
 
@@ -67,7 +74,8 @@ Primary risks addressed in this phase:
 
 | Control | Repo | Enforcement | Test coverage |
 |---|---|---|---|
-| Trusted proxy boundary | `harbour-chat/api`, `harbour-infra` | forwarded proto + proxy token + edge middleware | integration tests |
+| Trusted proxy boundary | `harbour-chat/api`, `harbour-infra` | forwarded proto + proxy token + edge middleware + startup validation | integration + config unit tests |
+| Realtime subscribe ACL | `harbour-chat/api` | WS subscribe filtered by channel membership | integration tests |
 | TLS strictness and headers | `harbour-infra`, `harbour-chat/api` | HSTS, nosniff, frame deny, HTTPS-only assumptions | integration tests |
 | Message at-rest encryption | `harbour-chat/api` | envelope encryption in service path | existing integration + migration utility |
 | Attachment at-rest encryption | `harbour-chat/api` | encrypted blob writes in attachment store | integration tests |
@@ -81,6 +89,7 @@ Primary risks addressed in this phase:
 
 - `HARBOUR_PROXY_TOKEN` is set in infra environment
 - chat receives `CHAT_TRUSTED_PROXY_TOKEN` with same value
+- chat receives non-empty `CHAT_MASTER_KEY_B64` (API refuses to start in gateway mode otherwise)
 - direct API access path from untrusted network blocked
 - smoke test: non-https forwarded proto rejected
 

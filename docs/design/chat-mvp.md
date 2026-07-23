@@ -25,8 +25,8 @@ First access to Harbour Home auto-adds the current user as `member`.
 | GET | `/api/servers/:id` | Server + channels |
 | POST | `/api/servers/:id/members` | Add member (`userId`) |
 | GET | `/api/servers/:id/members` | List members |
-| GET | `/api/channels/:id/messages` | Message history |
-| POST | `/api/channels/:id/messages` | Send message |
+| GET | `/api/channels/:id/messages` | Message history (nested `reply_to` when set) |
+| POST | `/api/channels/:id/messages` | Send message (`content`, optional `reply_to_message_id`) |
 | PATCH | `/api/messages/:id` | Edit |
 | DELETE | `/api/messages/:id` | Soft delete |
 | POST | `/api/messages/:id/reactions` | Toggle reaction |
@@ -35,6 +35,14 @@ First access to Harbour Home auto-adds the current user as `member`.
 | GET | `/api/ws` | WebSocket subscribe |
 | GET | `/health` | Service health probe |
 | GET | `/version` | Build/package version |
+
+Board share/forward picker: `GET /api/board/share-targets` (see [board-app.md](../../../board-app.md)).
+
+### Message JSON (replies)
+
+- Migration `010_message_reply.sql` adds nullable `messages.reply_to_message_id` (FK → `messages.id`, `ON DELETE SET NULL`).
+- Send/list responses may include `reply_to_message_id` and nested `reply_to` (`ReplyPreview`: `id`, `author_user_id`, `author_display_name`, `content`, `deleted_at`).
+- UI: right-click Copy / Reply / Forward; composer reply bar; Forward posts a new message via share-targets (not a reply link).
 
 ## WebSocket protocol (MVP)
 

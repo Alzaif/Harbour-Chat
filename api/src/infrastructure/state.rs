@@ -2,15 +2,17 @@ use std::sync::Arc;
 
 use sqlx::SqlitePool;
 
-use crate::application::ChatService;
+use crate::application::{BoardService, ChatService};
 use crate::config::Config;
 use crate::domain::entities::User;
 use crate::error::AppResult;
-use crate::domain::ports::AttachmentStore;
-use crate::infrastructure::persistence::{create_pool, SqliteChatRepository, SqliteUserRepository};
+use crate::domain::ports::{AttachmentStore, AvatarStore};
+use crate::infrastructure::persistence::{
+    create_pool, SqliteChatRepository, SqlitePostRepository, SqliteUserRepository,
+};
 use crate::infrastructure::realtime::InMemoryRealtimeHub;
 use crate::infrastructure::security::{AuditLogger, EnvelopeCrypto};
-use crate::infrastructure::storage::LocalAttachmentStore;
+use crate::infrastructure::storage::{LocalAttachmentStore, LocalAvatarStore};
 use crate::infrastructure::voice::InMemoryVoiceMediaAdapter;
 
 #[derive(Clone)]
@@ -18,6 +20,8 @@ pub struct AppState {
     pub config: Config,
     pub users: Arc<SqliteUserRepository>,
     pub chat: Arc<ChatService>,
+    pub board: Arc<BoardService>,
+    pub avatars: Arc<dyn AvatarStore>,
     pub realtime: Arc<InMemoryRealtimeHub>,
     #[allow(dead_code)]
     pool: SqlitePool,
@@ -25,6 +29,8 @@ pub struct AppState {
 
 impl AppState {
     pub async fn new(config: Config) -> AppResult<Self> {
+        config.validate_runtime()?;
+
         tokio::fs::create_dir_all(&config.data_dir)
             .await
             .map_err(|e| crate::error::AppError::Internal(e.to_string()))?;
@@ -40,6 +46,12 @@ impl AppState {
             config.max_attachment_bytes,
             crypto.clone(),
             config.quarantine_suspicious_attachments,
+        ));
+        let avatars: Arc<dyn AvatarStore> = Arc::new(LocalAvatarStore::new(
+            pool.clone(),
+            config.data_dir.clone(),
+            config.max_attachment_bytes,
+            crypto.clone(),
         ));
         let realtime = InMemoryRealtimeHub::new();
         let voice_media = InMemoryVoiceMediaAdapter::new(
@@ -57,11 +69,15 @@ impl AppState {
             crypto,
             audit,
         ));
+        let post_repo = Arc::new(SqlitePostRepository::new(pool.clone()));
+        let board = Arc::new(BoardService::new(post_repo, realtime.clone(), chat.clone()));
 
         Ok(Self {
             config,
             users,
             chat,
+            board,
+            avatars,
             realtime,
             pool,
         })

@@ -30,7 +30,7 @@ Phase 2 makes Harbour Chat feel like a daily messenger: **own messages on the ri
 
 Server detail (`GET /api/servers/:id`) includes `unreadByChannelId: Record<channelId, number>`.
 
-Messages include `reactions: { emoji, count, userIds }[]` when listed or sent.
+Messages include `reactions: { emoji, count, userIds }[]` when listed or sent. Quoted replies (`reply_to_message_id` / `reply_to`) are documented in [chat-mvp.md](chat-mvp.md).
 
 ## Bubble layout
 

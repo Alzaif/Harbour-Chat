@@ -2,13 +2,28 @@ export interface CurrentUser {
   id: string;
   email: string;
   displayName: string | null;
+  avatarUpdatedAt?: number | null;
+}
+
+export interface AvatarUploadResult {
+  mimeType: string;
+  sizeBytes: number;
+  avatarUpdatedAt: number;
 }
 
 export interface Server {
   id: string;
   name: string;
+  description: string | null;
   icon_url: string | null;
+  cardColor: string | null;
   owner_user_id: string;
+  myRole?: 'owner' | 'admin' | 'member';
+}
+
+export interface UserSettings {
+  pushToTalk: boolean;
+  pushToTalkKey: string;
 }
 
 export interface Channel {
@@ -38,6 +53,14 @@ export interface MessageAttachment {
   size_bytes: number;
 }
 
+export interface ReplyPreview {
+  id: string;
+  author_user_id: string;
+  author_display_name: string | null;
+  content: string;
+  deleted_at: string | null;
+}
+
 export interface Message {
   id: string;
   channel_id: string;
@@ -47,6 +70,8 @@ export interface Message {
   created_at: string;
   edited_at: string | null;
   deleted_at: string | null;
+  reply_to_message_id?: string | null;
+  reply_to?: ReplyPreview | null;
   reactions?: ReactionSummary[];
   attachment?: MessageAttachment | null;
 }
@@ -56,6 +81,78 @@ export interface Member {
   user_id: string;
   role: string;
   display_name?: string | null;
+}
+
+export interface DmInboxEntry {
+  channelId: string;
+  otherUserId: string;
+  otherDisplayName: string | null;
+  lastMessagePreview: string | null;
+  unreadCount: number;
+  updatedAt: number;
+}
+
+export interface DmPeer {
+  id: string;
+  email: string;
+  displayName: string | null;
+}
+
+export type FeedPeriod = 'hour' | 'day' | 'week' | 'month' | 'year' | 'all';
+
+export type VoteValue = -1 | 0 | 1;
+
+export interface Post {
+  id: string;
+  authorUserId: string;
+  authorDisplayName: string | null;
+  title: string | null;
+  body: string;
+  linkUrl: string | null;
+  previewTitle: string | null;
+  previewDescription: string | null;
+  previewImageUrl: string | null;
+  previewSiteName: string | null;
+  upvotes: number;
+  downvotes: number;
+  score: number;
+  commentCount: number;
+  myVote: VoteValue;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type FeedSectionKind = 'top' | 'older';
+
+export interface FeedSection {
+  kind: FeedSectionKind;
+  label?: string;
+  posts: Post[];
+}
+
+export interface BoardFeed {
+  period: FeedPeriod;
+  sections: FeedSection[];
+}
+
+export interface PostComment {
+  id: string;
+  postId: string;
+  authorUserId: string;
+  authorDisplayName: string | null;
+  parentCommentId: string | null;
+  body: string;
+  createdAt: string;
+  editedAt: string | null;
+  deletedAt: string | null;
+  replies: PostComment[];
+}
+
+export interface ShareTarget {
+  channelId: string;
+  label: string;
+  kind: 'dm' | 'channel';
+  serverName: string | null;
 }
 
 export type PresenceStatus = 'online' | 'idle' | 'dnd' | 'offline';

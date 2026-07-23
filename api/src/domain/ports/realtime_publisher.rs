@@ -7,6 +7,9 @@ use crate::error::AppResult;
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RealtimeEvent {
+    PostCreated {
+        post: serde_json::Value,
+    },
     MessageCreated {
         message: serde_json::Value,
     },

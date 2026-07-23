@@ -4,11 +4,8 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::contracts::gateway_headers::{self, APP_CHAT_SCOPE};
+use crate::contracts::gateway_headers::{self, APP_BOARD_SCOPE};
 use crate::domain::ports::{GatewayIdentity, UserRepository};
 use crate::error::AppError;
 use crate::infrastructure::state::AppState;
@@ -32,51 +29,11 @@ pub async fn gateway_identity_middleware(
     }
 }
 
-fn debug_log(hypothesis_id: &str, location: &str, message: &str, data: serde_json::Value) {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-    let payload = serde_json::json!({
-        "sessionId":"2fd5a8",
-        "runId": format!("api-debug-{timestamp}"),
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": timestamp
-    });
-    eprintln!("{payload}");
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/home/ashlee/Git-Repos/Harbour/.cursor/debug-2fd5a8.log")
-    {
-        let _ = writeln!(file, "{payload}");
-    }
-}
-
 async fn gateway_identity_inner(
     state: &AppState,
     req: &mut Request<Body>,
 ) -> Result<crate::domain::entities::User, AppError> {
     let config = &state.config;
-    // #region agent log
-    debug_log(
-        "S1",
-        "gateway.rs:gateway_identity_inner:start",
-        "Gateway auth middleware entered",
-        serde_json::json!({
-            "path": req.uri().path(),
-            "has_upgrade": req.headers().contains_key("upgrade"),
-            "has_forwarded_proto": req.headers().contains_key("x-forwarded-proto"),
-            "has_proxy_token": req.headers().contains_key("x-harbour-proxy-token"),
-            "has_user_id": req.headers().contains_key("x-harbour-user-id"),
-            "has_scopes": req.headers().contains_key("x-harbour-scopes"),
-            "has_session_cookie": session_cookie_value(req.headers().get("cookie").and_then(|v| v.to_str().ok())).is_some()
-        }),
-    );
-    // #endregion
 
     let (user_id, email, display_name) = if config.trust_gateway_headers {
         if config.require_https_forwarded_proto {
@@ -86,14 +43,6 @@ async fn gateway_identity_inner(
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or_default();
             if proto != "https" {
-                // #region agent log
-                debug_log(
-                    "S2",
-                    "gateway.rs:gateway_identity_inner:proto",
-                    "Rejected for non-https forwarded proto",
-                    serde_json::json!({ "path": req.uri().path(), "proto": proto }),
-                );
-                // #endregion
                 return Err(AppError::Unauthorized);
             }
         }
@@ -105,14 +54,6 @@ async fn gateway_identity_inner(
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or_default();
             if received != expected {
-                // #region agent log
-                debug_log(
-                    "S3",
-                    "gateway.rs:gateway_identity_inner:proxy-token",
-                    "Rejected for proxy token mismatch",
-                    serde_json::json!({ "path": req.uri().path(), "has_token": !received.is_empty() }),
-                );
-                // #endregion
                 return Err(AppError::Unauthorized);
             }
         }
@@ -145,15 +86,7 @@ async fn gateway_identity_inner(
                 .split_whitespace()
                 .collect::<Vec<_>>();
 
-            if !scopes.contains(&APP_CHAT_SCOPE) {
-                // #region agent log
-                debug_log(
-                    "S4",
-                    "gateway.rs:gateway_identity_inner:scopes",
-                    "Rejected for missing app:chat scope",
-                    serde_json::json!({ "path": req.uri().path(), "scopes_count": scopes.len() }),
-                );
-                // #endregion
+            if !scopes.contains(&APP_BOARD_SCOPE) {
                 return Err(AppError::Unauthorized);
             }
 
@@ -164,21 +97,13 @@ async fn gateway_identity_inner(
                 .map(str::to_string);
 
             (user_id, email, display_name)
-        } else if req.uri().path() == "/ws" {
+        } else if req.uri().path() == "/api/ws" {
             let cookie = session_cookie_value(
                 req.headers()
                     .get("cookie")
                     .and_then(|value| value.to_str().ok()),
             )
             .ok_or(AppError::Unauthorized)?;
-            // #region agent log
-            debug_log(
-                "S8",
-                "gateway.rs:gateway_identity_inner:cookie",
-                "Resolving websocket identity via Portcullis forward",
-                serde_json::json!({ "path": req.uri().path() }),
-            );
-            // #endregion
             resolve_identity_from_portcullis(state, cookie).await?
         } else {
             return Err(AppError::Unauthorized);
@@ -201,17 +126,6 @@ async fn gateway_identity_inner(
             display_name,
         })
         .await
-        .map(|user| {
-            // #region agent log
-            debug_log(
-                "S5",
-                "gateway.rs:gateway_identity_inner:success",
-                "Gateway auth succeeded",
-                serde_json::json!({ "path": req.uri().path(), "user_id_len": user.id.len() }),
-            );
-            // #endregion
-            user
-        })
 }
 
 async fn resolve_identity_from_portcullis(
@@ -227,19 +141,12 @@ async fn resolve_identity_from_portcullis(
         .header("x-forwarded-proto", "https")
         .header("host", &state.config.forward_auth_host)
         .header("x-forwarded-host", &state.config.forward_auth_host)
+        .header("x-forwarded-uri", &state.config.forward_auth_uri)
         .send()
         .await
         .map_err(|err| AppError::Internal(err.to_string()))?;
 
     if !response.status().is_success() {
-        // #region agent log
-        debug_log(
-            "S9",
-            "gateway.rs:resolve_identity_from_portcullis",
-            "Portcullis forward auth rejected websocket session",
-            serde_json::json!({ "status": response.status().as_u16() }),
-        );
-        // #endregion
         return Err(AppError::Unauthorized);
     }
 
@@ -269,15 +176,7 @@ async fn resolve_identity_from_portcullis(
         .split_whitespace()
         .collect::<Vec<_>>();
 
-    if !scopes.contains(&APP_CHAT_SCOPE) {
-        // #region agent log
-        debug_log(
-            "S4",
-            "gateway.rs:resolve_identity_from_portcullis:scopes",
-            "Rejected for missing app:chat scope",
-            serde_json::json!({ "scopes_count": scopes.len() }),
-        );
-        // #endregion
+    if !scopes.contains(&APP_BOARD_SCOPE) {
         return Err(AppError::Unauthorized);
     }
 

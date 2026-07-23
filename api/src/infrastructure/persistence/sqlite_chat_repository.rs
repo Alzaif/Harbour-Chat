@@ -6,8 +6,8 @@ use uuid::Uuid;
 use std::collections::HashMap;
 
 use crate::domain::entities::{
-    Channel, ChannelType, Member, MemberRole, Message, Presence, PresenceStatus, ReactionSummary,
-    Server, TypingIndicator, User, VoiceParticipant,
+    Channel, ChannelType, DmInboxEntry, DmPeer, Member, MemberRole, Message, Presence,
+    PresenceStatus, ReactionSummary, Server, TypingIndicator, User, VoiceParticipant,
 };
 use crate::domain::ports::{ChatRepository, ServerDetail};
 use crate::error::{AppError, AppResult};
@@ -35,12 +35,80 @@ fn opt_ts(ms: Option<i64>) -> AppResult<Option<chrono::DateTime<Utc>>> {
     }
 }
 
+type ServerRow = (
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    String,
+    i64,
+    i64,
+);
+
+type ServerListRow = (
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    String,
+    String,
+    i64,
+    i64,
+);
+
+fn map_server_row(
+    (id, name, description, icon_url, card_color, owner_user_id, created_at, updated_at): ServerRow,
+) -> AppResult<Server> {
+    Ok(Server {
+        id,
+        name,
+        description,
+        icon_url,
+        card_color,
+        owner_user_id,
+        my_role: None,
+        created_at: ts(created_at)?,
+        updated_at: ts(updated_at)?,
+    })
+}
+
+fn map_server_list_row(
+    (
+        id,
+        name,
+        description,
+        icon_url,
+        card_color,
+        owner_user_id,
+        role,
+        created_at,
+        updated_at,
+    ): ServerListRow,
+) -> AppResult<Server> {
+    Ok(Server {
+        id,
+        name,
+        description,
+        icon_url,
+        card_color,
+        owner_user_id,
+        my_role: MemberRole::from_str(&role),
+        created_at: ts(created_at)?,
+        updated_at: ts(updated_at)?,
+    })
+}
+
+const SERVER_SELECT: &str =
+    "SELECT id, name, description, icon_url, card_color, owner_user_id, created_at, updated_at";
+
 #[async_trait]
 impl ChatRepository for SqliteChatRepository {
     async fn list_servers_for_user(&self, user_id: &str) -> AppResult<Vec<Server>> {
-        let rows = sqlx::query_as::<_, (String, String, Option<String>, String, i64, i64)>(
+        let rows = sqlx::query_as::<_, ServerListRow>(
             r#"
-            SELECT s.id, s.name, s.icon_url, s.owner_user_id, s.created_at, s.updated_at
+            SELECT s.id, s.name, s.description, s.icon_url, s.card_color, s.owner_user_id, m.role, s.created_at, s.updated_at
             FROM servers s
             INNER JOIN members m ON m.server_id = s.id
             WHERE m.user_id = ?
@@ -52,44 +120,17 @@ impl ChatRepository for SqliteChatRepository {
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
-        rows.into_iter()
-            .map(
-                |(id, name, icon_url, owner_user_id, created_at, updated_at)| {
-                    Ok(Server {
-                        id,
-                        name,
-                        icon_url,
-                        owner_user_id,
-                        created_at: ts(created_at)?,
-                        updated_at: ts(updated_at)?,
-                    })
-                },
-            )
-            .collect()
+        rows.into_iter().map(map_server_list_row).collect()
     }
 
     async fn get_server(&self, server_id: &str) -> AppResult<Option<Server>> {
-        let row = sqlx::query_as::<_, (String, String, Option<String>, String, i64, i64)>(
-            "SELECT id, name, icon_url, owner_user_id, created_at, updated_at FROM servers WHERE id = ?",
-        )
-        .bind(server_id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        let row = sqlx::query_as::<_, ServerRow>(&format!("{SERVER_SELECT} FROM servers WHERE id = ?"))
+            .bind(server_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?;
 
-        row.map(
-            |(id, name, icon_url, owner_user_id, created_at, updated_at)| {
-                Ok(Server {
-                    id,
-                    name,
-                    icon_url,
-                    owner_user_id,
-                    created_at: ts(created_at)?,
-                    updated_at: ts(updated_at)?,
-                })
-            },
-        )
-        .transpose()
+        row.map(map_server_row).transpose()
     }
 
     async fn get_server_detail(&self, server_id: &str) -> AppResult<Option<ServerDetail>> {
@@ -109,7 +150,7 @@ impl ChatRepository for SqliteChatRepository {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().timestamp_millis();
         sqlx::query(
-            "INSERT INTO servers (id, name, icon_url, owner_user_id, created_at, updated_at) VALUES (?, ?, NULL, ?, ?, ?)",
+            "INSERT INTO servers (id, name, description, icon_url, card_color, owner_user_id, created_at, updated_at) VALUES (?, ?, NULL, NULL, NULL, ?, ?, ?)",
         )
         .bind(&id)
         .bind(name)
@@ -123,6 +164,56 @@ impl ChatRepository for SqliteChatRepository {
         self.get_server(&id)
             .await?
             .ok_or_else(|| AppError::Internal("server insert failed".into()))
+    }
+
+    async fn update_server(
+        &self,
+        server_id: &str,
+        name: Option<&str>,
+        description: Option<Option<&str>>,
+        icon_url: Option<Option<&str>>,
+        card_color: Option<Option<&str>>,
+    ) -> AppResult<Server> {
+        let current = self
+            .get_server(server_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("server not found".into()))?;
+        let next_name = name.unwrap_or(&current.name);
+        let next_description = description.unwrap_or(current.description.as_deref());
+        let next_icon_url = icon_url.unwrap_or(current.icon_url.as_deref());
+        let next_card_color = card_color.unwrap_or(current.card_color.as_deref());
+        let now = Utc::now().timestamp_millis();
+        sqlx::query(
+            r#"
+            UPDATE servers
+            SET name = ?, description = ?, icon_url = ?, card_color = ?, updated_at = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(next_name)
+        .bind(next_description)
+        .bind(next_icon_url)
+        .bind(next_card_color)
+        .bind(now)
+        .bind(server_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+        self.get_server(server_id)
+            .await?
+            .ok_or_else(|| AppError::Internal("server update failed".into()))
+    }
+
+    async fn delete_server(&self, server_id: &str) -> AppResult<()> {
+        let result = sqlx::query("DELETE FROM servers WHERE id = ?")
+            .bind(server_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        if result.rows_affected() == 0 {
+            return Err(AppError::NotFound("server not found".into()));
+        }
+        Ok(())
     }
 
     async fn get_member(&self, server_id: &str, user_id: &str) -> AppResult<Option<Member>> {
@@ -323,10 +414,11 @@ impl ChatRepository for SqliteChatRepository {
                     i64,
                     Option<i64>,
                     Option<i64>,
+                    Option<String>,
                 ),
             >(
                 r#"
-                SELECT m.id, m.channel_id, m.author_user_id, u.display_name, m.content, m.created_at, m.edited_at, m.deleted_at
+                SELECT m.id, m.channel_id, m.author_user_id, u.display_name, m.content, m.created_at, m.edited_at, m.deleted_at, m.reply_to_message_id
                 FROM messages m
                 INNER JOIN users u ON u.id = m.author_user_id
                 WHERE m.channel_id = ? AND m.created_at < ?
@@ -351,10 +443,11 @@ impl ChatRepository for SqliteChatRepository {
                     i64,
                     Option<i64>,
                     Option<i64>,
+                    Option<String>,
                 ),
             >(
                 r#"
-                SELECT m.id, m.channel_id, m.author_user_id, u.display_name, m.content, m.created_at, m.edited_at, m.deleted_at
+                SELECT m.id, m.channel_id, m.author_user_id, u.display_name, m.content, m.created_at, m.edited_at, m.deleted_at, m.reply_to_message_id
                 FROM messages m
                 INNER JOIN users u ON u.id = m.author_user_id
                 WHERE m.channel_id = ?
@@ -381,6 +474,7 @@ impl ChatRepository for SqliteChatRepository {
                     created_at,
                     edited_at,
                     deleted_at,
+                    reply_to_message_id,
                 )| {
                     Ok(Message {
                         id,
@@ -391,6 +485,8 @@ impl ChatRepository for SqliteChatRepository {
                         created_at: ts(created_at)?,
                         edited_at: opt_ts(edited_at)?,
                         deleted_at: opt_ts(deleted_at)?,
+                        reply_to_message_id,
+                        reply_to: None,
                         reactions: vec![],
                         attachment: None,
                     })
@@ -406,17 +502,19 @@ impl ChatRepository for SqliteChatRepository {
         channel_id: &str,
         author: &User,
         content: &str,
+        reply_to_message_id: Option<&str>,
     ) -> AppResult<Message> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().timestamp_millis();
         sqlx::query(
-            "INSERT INTO messages (id, channel_id, author_user_id, content, created_at) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO messages (id, channel_id, author_user_id, content, created_at, reply_to_message_id) VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(channel_id)
         .bind(&author.id)
         .bind(content)
         .bind(now)
+        .bind(reply_to_message_id)
         .execute(&self.pool)
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
@@ -438,10 +536,11 @@ impl ChatRepository for SqliteChatRepository {
                 i64,
                 Option<i64>,
                 Option<i64>,
+                Option<String>,
             ),
         >(
             r#"
-            SELECT m.id, m.channel_id, m.author_user_id, u.display_name, m.content, m.created_at, m.edited_at, m.deleted_at
+            SELECT m.id, m.channel_id, m.author_user_id, u.display_name, m.content, m.created_at, m.edited_at, m.deleted_at, m.reply_to_message_id
             FROM messages m
             INNER JOIN users u ON u.id = m.author_user_id
             WHERE m.id = ?
@@ -462,6 +561,7 @@ impl ChatRepository for SqliteChatRepository {
                 created_at,
                 edited_at,
                 deleted_at,
+                reply_to_message_id,
             )| {
                 Ok(Message {
                     id,
@@ -472,6 +572,8 @@ impl ChatRepository for SqliteChatRepository {
                     created_at: ts(created_at)?,
                     edited_at: opt_ts(edited_at)?,
                     deleted_at: opt_ts(deleted_at)?,
+                    reply_to_message_id,
+                    reply_to: None,
                     reactions: vec![],
                     attachment: None,
                 })
@@ -745,6 +847,103 @@ impl ChatRepository for SqliteChatRepository {
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
         Ok(row.is_some())
+    }
+
+    async fn list_dm_inbox_for_user(&self, user_id: &str) -> AppResult<Vec<DmInboxEntry>> {
+        let rows = sqlx::query_as::<_, (String, String, Option<String>, Option<String>, i64, i64)>(
+            r#"
+            SELECT
+                c.id,
+                other_p.user_id,
+                u.display_name,
+                (
+                    SELECT m.content FROM messages m
+                    WHERE m.channel_id = c.id AND m.deleted_at IS NULL
+                    ORDER BY m.created_at DESC LIMIT 1
+                ),
+                (
+                    SELECT COUNT(*) FROM messages m
+                    WHERE m.channel_id = c.id
+                    AND m.author_user_id != ?
+                    AND m.deleted_at IS NULL
+                    AND (
+                        NOT EXISTS (
+                            SELECT 1 FROM read_states rs
+                            WHERE rs.channel_id = m.channel_id AND rs.user_id = ?
+                        )
+                        OR m.created_at > COALESCE((
+                            SELECT m2.created_at
+                            FROM read_states rs
+                            LEFT JOIN messages m2 ON m2.id = rs.last_read_message_id
+                            WHERE rs.channel_id = m.channel_id AND rs.user_id = ?
+                        ), 0)
+                    )
+                ),
+                COALESCE(
+                    (SELECT MAX(created_at) FROM messages WHERE channel_id = c.id),
+                    c.updated_at
+                )
+            FROM channels c
+            INNER JOIN dm_participants self_p ON self_p.channel_id = c.id AND self_p.user_id = ?
+            INNER JOIN dm_participants other_p ON other_p.channel_id = c.id AND other_p.user_id != ?
+            LEFT JOIN users u ON u.id = other_p.user_id
+            WHERE c.type = 'dm'
+            ORDER BY 6 DESC
+            "#,
+        )
+        .bind(user_id)
+        .bind(user_id)
+        .bind(user_id)
+        .bind(user_id)
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+        Ok(rows
+            .into_iter()
+            .map(
+                |(channel_id, other_user_id, other_display_name, last_message_preview, unread_count, updated_at)| {
+                    DmInboxEntry {
+                        channel_id,
+                        other_user_id,
+                        other_display_name,
+                        last_message_preview,
+                        unread_count: unread_count as u32,
+                        updated_at,
+                    }
+                },
+            )
+            .collect())
+    }
+
+    async fn list_dm_peers_for_user(&self, user_id: &str) -> AppResult<Vec<DmPeer>> {
+        let rows = sqlx::query_as::<_, (String, String, Option<String>)>(
+            r#"
+            SELECT DISTINCT u.id, u.email, u.display_name
+            FROM users u
+            INNER JOIN members m ON m.user_id = u.id
+            WHERE m.server_id IN (
+                SELECT server_id FROM members WHERE user_id = ?
+            )
+            AND u.id != ?
+            ORDER BY COALESCE(u.display_name, u.email)
+            "#,
+        )
+        .bind(user_id)
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(id, email, display_name)| DmPeer {
+                id,
+                email,
+                display_name,
+            })
+            .collect())
     }
 
     async fn upsert_presence(

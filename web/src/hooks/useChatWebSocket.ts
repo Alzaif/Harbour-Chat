@@ -1,7 +1,9 @@
 import { useEffect, useRef } from 'react';
 import type { Message } from '../api/types';
+import { apiUrl } from '../api/app-path';
 
 type WsPayload =
+  | { type: 'post_created'; post: import('../api/types').Post }
   | { type: 'message_created'; message: Message }
   | { type: 'message_updated'; message: Message }
   | { type: 'message_deleted'; message_id: string; channel_id: string }
@@ -52,27 +54,6 @@ export function useChatWebSocket(
     if (typeof window === 'undefined' || typeof WebSocket === 'undefined') return;
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const runId = `ws-debug-${Date.now()}`;
-    const sendDebugLog = (
-      hypothesisId: string,
-      location: string,
-      message: string,
-      data: Record<string, unknown>,
-    ) => {
-      fetch('http://127.0.0.1:7936/ingest/9bb09e57-7fd7-47d9-9347-58d91bb98d05', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '2fd5a8' },
-        body: JSON.stringify({
-          sessionId: '2fd5a8',
-          runId,
-          hypothesisId,
-          location,
-          message,
-          data,
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-    };
     let disposed = false;
     let ws: WebSocket | null = null;
     let reconnectTimer: number | null = null;
@@ -87,60 +68,23 @@ export function useChatWebSocket(
 
     const connect = () => {
       if (disposed) return;
-      const wsUrl = `${protocol}//${window.location.host}/api/ws`;
-      // #region agent log
-      sendDebugLog('H1', 'useChatWebSocket.ts:connect', 'Creating websocket', {
-        wsUrl,
-        host: window.location.host,
-        protocol: window.location.protocol,
-        channelCount: channelIds.length,
-      });
-      // #endregion
+      const wsUrl = `${protocol}//${window.location.host}${apiUrl('/api/ws')}`;
       ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
         reconnectAttempt = 0;
-        // #region agent log
-        sendDebugLog('H2', 'useChatWebSocket.ts:onopen', 'Websocket opened', {
-          readyState: ws?.readyState ?? null,
-          reconnectAttempt,
-        });
-        // #endregion
         try {
           ws?.send(JSON.stringify({ type: 'subscribe', channel_ids: [...channelIds] }));
-          // #region agent log
-          sendDebugLog('H3', 'useChatWebSocket.ts:onopen', 'Subscribe frame sent', {
-            channelIds: [...channelIds],
-          });
-          // #endregion
-        } catch (error) {
-          // #region agent log
-          sendDebugLog('H3', 'useChatWebSocket.ts:onopen', 'Subscribe frame failed', {
-            error: error instanceof Error ? error.message : 'unknown',
-          });
-          // #endregion
+        } catch {
+          /* ignore subscribe failures; reconnect will retry */
         }
       };
 
-      ws.onclose = (event) => {
-        // #region agent log
-        sendDebugLog('H4', 'useChatWebSocket.ts:onclose', 'Websocket closed', {
-          code: event.code,
-          reason: event.reason,
-          wasClean: event.wasClean,
-          readyState: ws?.readyState ?? null,
-        });
-        // #endregion
+      ws.onclose = () => {
         scheduleReconnect();
       };
 
       ws.onerror = () => {
-        // #region agent log
-        sendDebugLog('H5', 'useChatWebSocket.ts:onerror', 'Websocket error fired', {
-          readyState: ws?.readyState ?? null,
-          reconnectAttempt,
-        });
-        // #endregion
         ws?.close();
       };
 

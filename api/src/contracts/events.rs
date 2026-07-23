@@ -11,6 +11,26 @@ pub const VOICE_PRODUCER_CREATED_V1: &str = "harbour.voice-producer-created.v1";
 pub const VOICE_CONSUMER_CREATED_V1: &str = "harbour.voice-consumer-created.v1";
 pub const VOICE_ICE_CANDIDATE_V1: &str = "harbour.voice-ice-candidate.v1";
 pub const VOICE_ERROR_V1: &str = "harbour.voice-error.v1";
+pub const POST_CREATED_V1: &str = "harbour.post-created.v1";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PostCreatedV1 {
+    pub schema: String,
+    pub post_id: String,
+    pub author_user_id: String,
+    pub occurred_at: String,
+}
+
+impl PostCreatedV1 {
+    pub fn new(post_id: String, author_user_id: String, occurred_at: String) -> Self {
+        Self {
+            schema: POST_CREATED_V1.into(),
+            post_id,
+            author_user_id,
+            occurred_at,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MessageSentV1 {
